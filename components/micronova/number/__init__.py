@@ -113,5 +113,5 @@ async def to_code(config):
                 power_level_config.get(CONF_MEMORY_WRITE_LOCATION)
             )
         )
-        cg.add(numb.set_stove_power_level_offset(power_level_config[CONF_POWER_LEVEL_OFFSET]))
+        cg.add(numb.set_power_level_offset(power_level_config[CONF_POWER_LEVEL_OFFSET]))
         cg.add(numb.set_function(MicroNovaFunctions.STOVE_FUNCTION_POWER_LEVEL))
