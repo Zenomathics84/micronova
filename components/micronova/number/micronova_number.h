@@ -20,8 +20,12 @@ class MicroNovaNumber : public number::Number, public MicroNovaSensorListener {
   void set_memory_write_location(uint8_t l) { this->memory_write_location_ = l; }
   uint8_t get_memory_write_location() { return this->memory_write_location_; }
 
+  void set_power_level_offset(uint8_t p) { this->power_level_offset_ = p; }
+  uint8_t get_set_power_level_offset() { return this->power_level_offset_; }
+
  protected:
   uint8_t memory_write_location_ = 0;
+  int power_level_offset_ = 0;
 };
 
 }  // namespace micronova
