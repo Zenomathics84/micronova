@@ -206,8 +206,8 @@ void MicroNova::read_address(MicroNovaSerialTransmission read_request) {
     this->enable_rx_pin_->digital_write(false);
 
     this->current_transmission_.request_transmission_time = millis();
-    this->current_transmission_.memory_location = write_request.memory_location;;
-    this->current_transmission_.memory_address = write_request.memory_address;
+    this->current_transmission_.memory_location = read_request.memory_location;;
+    this->current_transmission_.memory_address = read_request.memory_address;
     this->current_transmission_.reply_pending = true;
     this->current_transmission_.initiating_listener = nullptr;
   } else {
