@@ -181,6 +181,7 @@ void MicroNova::write_address(MicroNovaSerialTransmission write_request) {
   } else {
     ESP_LOGE(TAG, "Reply is pending, skipping write");
   }
+}
 
 void MicroNova::read_address(MicroNovaSerialTransmission read_request) {
 
