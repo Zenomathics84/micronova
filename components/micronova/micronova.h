@@ -139,6 +139,7 @@ class MicroNova : public PollingComponent, public uart::UARTDevice {
 
   void request_address(uint8_t location, uint8_t address, MicroNovaSensorListener *listener);
   void write_address(MicroNovaSerialTransmission write_request);
+  void read_address(MicroNovaSerialTransmission read_request);
   int read_stove_reply();
 
   void set_enable_rx_pin(GPIOPin *enable_rx_pin) { this->enable_rx_pin_ = enable_rx_pin; }
@@ -153,6 +154,7 @@ class MicroNova : public PollingComponent, public uart::UARTDevice {
   uint16_t get_serial_reply_delay() { return this->serial_reply_delay_; }
 
   void queue_write_request(uint8_t location, uint8_t address, uint8_t data);
+  void queue_read_request(uint8_t location, uint8_t address);
 
  protected:
 
@@ -164,6 +166,7 @@ class MicroNova : public PollingComponent, public uart::UARTDevice {
   Mutex reply_pending_mutex_;
   MicroNovaSerialTransmission current_transmission_;
   std::deque<MicroNovaSerialTransmission> write_request_queue_;
+  std::deque<MicroNovaSerialTransmission> read_request_queue_;
 
   std::vector<MicroNovaSensorListener *> micronova_listeners_{};
   MicroNovaSwitchListener *stove_switch_{nullptr};

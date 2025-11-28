@@ -56,6 +56,9 @@ void MicroNova::loop() {
     if ( this->write_request_queue_.size() > 0 ) {
       this->write_address(this->write_request_queue_.front());
       this->write_request_queue_.pop_front();
+    } else if(this->read_request_queue_.size() > 0) {
+      this->read_address(this->read_request_queue_.front());
+      this->read_request_queue_.pop_front();
     } else {
       // If no write requests are pending, get on with reading.
       for (auto &mv_listener : this->micronova_listeners_) {
@@ -110,6 +113,7 @@ int MicroNova::read_stove_reply() {
 
   this->reply_pending_mutex_.unlock();
   ESP_LOGV(TAG, "Reply from stove [%02X,%02X]", reply_data[0], reply_data[1]);
+  ESP_LOGD(TAG, "sensor on location:0x%02X and address:0x%02X reports value 0x%02X.", this->current_transmission_.memory_location, this->current_transmission_.memory_address, reply_data[1]);
 
   checksum = ((uint16_t) this->current_transmission_.memory_location +
               (uint16_t) this->current_transmission_.memory_address + (uint16_t) reply_data[1]) &
@@ -135,6 +139,19 @@ void MicroNova::queue_write_request(uint8_t location, uint8_t address, uint8_t d
   t.initiating_listener = nullptr;
 
   this->write_request_queue_.push_back(t);
+}
+
+void MicroNova::queue_read_request(uint8_t location, uint8_t address)
+{
+  MicroNovaSerialTransmission t;
+
+  t.request_transmission_time = 0;
+  t.memory_location = location;
+  t.memory_address = address;
+  t.reply_pending = false;
+  t.initiating_listener = nullptr;
+
+  this->read_request_queue_.push_back(t);
 }
 
 void MicroNova::write_address(MicroNovaSerialTransmission write_request) {
@@ -163,6 +180,37 @@ void MicroNova::write_address(MicroNovaSerialTransmission write_request) {
     this->current_transmission_.initiating_listener = nullptr;
   } else {
     ESP_LOGE(TAG, "Reply is pending, skipping write");
+  }
+
+void MicroNova::read_address(MicroNovaSerialTransmission read_request) {
+
+  uint8_t write_data[2] = {0, 0};
+  uint8_t trash_rx;
+
+  if (this->reply_pending_mutex_.try_lock()) {
+    // clear rx buffer.
+    // Stove hickups may cause late replies in the rx
+    while (this->available()) {
+      this->read_byte(&trash_rx);
+      ESP_LOGW(TAG, "Reading excess byte 0x%02X", trash_rx);
+    }
+
+    write_data[0] = read_request.memory_location;
+    write_data[1] = read_request.memory_address;
+    ESP_LOGV(TAG, "Request from stove [%02X,%02X]", write_data[0], write_data[1]);
+
+    this->enable_rx_pin_->digital_write(true);
+    this->write_array(write_data, 2);
+    this->flush();
+    this->enable_rx_pin_->digital_write(false);
+
+    this->current_transmission_.request_transmission_time = millis();
+    this->current_transmission_.memory_location = write_request.memory_location;;
+    this->current_transmission_.memory_address = write_request.memory_address;
+    this->current_transmission_.reply_pending = true;
+    this->current_transmission_.initiating_listener = nullptr;
+  } else {
+    ESP_LOGE(TAG, "Reply is pending, skipping read request");
   }
 }
 
