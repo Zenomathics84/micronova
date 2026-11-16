@@ -3,30 +3,30 @@
 #include "esphome/components/micronova/micronova.h"
 #include "esphome/components/number/number.h"
 
-namespace esphome {
-namespace micronova {
+namespace esphome::micronova {
 
-class MicroNovaNumber : public number::Number, public MicroNovaSensorListener {
+class MicroNovaNumber final : public number::Number, public MicroNovaListener {
  public:
-  MicroNovaNumber() {}
-  MicroNovaNumber(MicroNova *m) : MicroNovaSensorListener(m) {}
-  void dump_config() override { LOG_NUMBER("", "Micronova number", this); }
+  MicroNovaNumber(MicroNova *m) : MicroNovaListener(m) {}
+  void dump_config() override;
   void control(float value) override;
-  void request_value_from_stove() override {
-    this->micronova_->request_address(this->memory_location_, this->memory_address_, this);
-  }
   void process_value_from_stove(int value_from_stove) override;
 
-  void set_memory_write_location(uint8_t l) { this->memory_write_location_ = l; }
-  uint8_t get_memory_write_location() { return this->memory_write_location_; }
-
-  void set_power_level_offset(uint8_t p) { this->power_level_offset_ = p; }
-  uint8_t get_set_power_level_offset() { return this->power_level_offset_; }
+  void set_use_step_scaling(bool v) { this->use_step_scaling_ = v; }
+  void set_value_offset(uint8_t offset) { this->value_offset_ = offset; }
+  /// Also write the same raw value to a second location/address (e.g. the RAM copy of an EEPROM setting)
+  void set_mirror_write(uint8_t location, uint8_t address) {
+    this->mirror_location_ = location;
+    this->mirror_address_ = address;
+    this->has_mirror_write_ = true;
+  }
 
  protected:
-  uint8_t memory_write_location_ = 0;
-  int power_level_offset_ = 0;
+  bool use_step_scaling_ = false;
+  bool has_mirror_write_ = false;
+  uint8_t value_offset_ = 0;
+  uint8_t mirror_location_ = 0;
+  uint8_t mirror_address_ = 0;
 };
 
-}  // namespace micronova
-}  // namespace esphome
+}  // namespace esphome::micronova

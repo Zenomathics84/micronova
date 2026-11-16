@@ -1,21 +1,17 @@
 import esphome.codegen as cg
-import esphome.config_validation as cv
 from esphome.components import number
-from esphome.const import (
-    DEVICE_CLASS_TEMPERATURE,
-    UNIT_CELSIUS,
-    CONF_STEP,
-    CONF_MAX_VALUE,
-)
+import esphome.config_validation as cv
+from esphome.const import CONF_STEP, DEVICE_CLASS_TEMPERATURE, UNIT_CELSIUS
+from esphome.types import ConfigType
 
 from .. import (
-    MicroNova,
-    MicroNovaFunctions,
     CONF_MICRONOVA_ID,
-    CONF_MEMORY_LOCATION,
-    CONF_MEMORY_ADDRESS,
-    MICRONOVA_LISTENER_SCHEMA,
+    MICRONOVA_ADDRESS_SCHEMA,
+    MicroNova,
+    MicroNovaListener,
     micronova_ns,
+    register_micronova_writer,
+    to_code_micronova_listener,
 )
 
 ICON_FLASH = "mdi:flash"
@@ -23,9 +19,14 @@ ICON_FLASH = "mdi:flash"
 CONF_THERMOSTAT_TEMPERATURE = "thermostat_temperature"
 CONF_POWER_LEVEL = "power_level"
 CONF_POWER_LEVEL_OFFSET = "power_level_offset"
-CONF_MEMORY_WRITE_LOCATION = "memory_write_location"
+CONF_RAM_WRITE_LOCATION = "ram_write_location"
+CONF_RAM_WRITE_ADDRESS = "ram_write_address"
 
-MicroNovaNumber = micronova_ns.class_("MicroNovaNumber", number.Number, cg.Component)
+POWER_LEVEL_MAX = 5
+
+MicroNovaNumber = micronova_ns.class_(
+    "MicroNovaNumber", number.Number, MicroNovaListener
+)
 
 CONFIG_SCHEMA = cv.Schema(
     {
@@ -36,15 +37,14 @@ CONFIG_SCHEMA = cv.Schema(
             device_class=DEVICE_CLASS_TEMPERATURE,
         )
         .extend(
-            MICRONOVA_LISTENER_SCHEMA(
-                default_memory_location=0x20, default_memory_address=0x7D
+            MICRONOVA_ADDRESS_SCHEMA(
+                default_memory_location=0x20,
+                default_memory_address=0x7D,
+                is_polling_component=True,
             )
         )
         .extend(
             {
-                cv.Optional(
-                    CONF_MEMORY_WRITE_LOCATION, default=0xA0
-                ): cv.hex_int_range(),
                 cv.Optional(CONF_STEP, default=1.0): cv.float_range(min=0.1, max=10.0),
             }
         ),
@@ -53,65 +53,63 @@ CONFIG_SCHEMA = cv.Schema(
             icon=ICON_FLASH,
         )
         .extend(
-            MICRONOVA_LISTENER_SCHEMA(
-                default_memory_location=0x20, default_memory_address=0x7F
+            MICRONOVA_ADDRESS_SCHEMA(
+                default_memory_location=0x20,
+                default_memory_address=0x7F,
+                is_polling_component=True,
             )
         )
         .extend(
             {
-                cv.Optional(CONF_MEMORY_WRITE_LOCATION, default=0xA0): cv.hex_int_range(),
-                cv.Optional(CONF_MAX_VALUE, default=5): cv.int_range(min=1),
-                cv.Optional(CONF_POWER_LEVEL_OFFSET, default=0): cv.int_range(min=0, max=250),
+                # Some boards store the power level with a fixed offset
+                # (e.g. 136 -> raw 137..141 for levels 1..5)
+                cv.Optional(CONF_POWER_LEVEL_OFFSET, default=0): cv.int_range(
+                    min=0, max=0xFF - POWER_LEVEL_MAX
+                ),
+                # Optional second write of the same raw value, e.g. to the RAM
+                # copy of the EEPROM setting so the stove applies it immediately
+                cv.Optional(CONF_RAM_WRITE_LOCATION, default=0x00): cv.hex_int_range(
+                    min=0x00, max=0x79
+                ),
+                cv.Optional(CONF_RAM_WRITE_ADDRESS): cv.hex_int_range(
+                    min=0x00, max=0xFF
+                ),
             }
         ),
     }
 )
 
 
-async def to_code(config):
+async def to_code(config: ConfigType) -> None:
     mv = await cg.get_variable(config[CONF_MICRONOVA_ID])
 
     if thermostat_temperature_config := config.get(CONF_THERMOSTAT_TEMPERATURE):
+        register_micronova_writer()
         numb = await number.new_number(
             thermostat_temperature_config,
+            mv,
             min_value=0,
             max_value=40,
             step=thermostat_temperature_config.get(CONF_STEP),
         )
-        cg.add(numb.set_micronova_object(mv))
-        cg.add(mv.register_micronova_listener(numb))
-        cg.add(
-            numb.set_memory_location(
-                thermostat_temperature_config[CONF_MEMORY_LOCATION]
-            )
-        )
-        cg.add(
-            numb.set_memory_address(thermostat_temperature_config[CONF_MEMORY_ADDRESS])
-        )
-        cg.add(
-            numb.set_memory_write_location(
-                thermostat_temperature_config.get(CONF_MEMORY_WRITE_LOCATION)
-            )
-        )
-        cg.add(
-            numb.set_function(MicroNovaFunctions.STOVE_FUNCTION_THERMOSTAT_TEMPERATURE)
-        )
+        await to_code_micronova_listener(mv, numb, thermostat_temperature_config)
+        cg.add(numb.set_use_step_scaling(True))
 
     if power_level_config := config.get(CONF_POWER_LEVEL):
+        register_micronova_writer()
         numb = await number.new_number(
             power_level_config,
+            mv,
             min_value=1,
-            max_value=power_level_config.get(CONF_MAX_VALUE),
+            max_value=POWER_LEVEL_MAX,
             step=1,
         )
-        cg.add(numb.set_micronova_object(mv))
-        cg.add(mv.register_micronova_listener(numb))
-        cg.add(numb.set_memory_location(power_level_config[CONF_MEMORY_LOCATION]))
-        cg.add(numb.set_memory_address(power_level_config[CONF_MEMORY_ADDRESS]))
-        cg.add(
-            numb.set_memory_write_location(
-                power_level_config.get(CONF_MEMORY_WRITE_LOCATION)
+        await to_code_micronova_listener(mv, numb, power_level_config)
+        if offset := power_level_config[CONF_POWER_LEVEL_OFFSET]:
+            cg.add(numb.set_value_offset(offset))
+        if (ram_address := power_level_config.get(CONF_RAM_WRITE_ADDRESS)) is not None:
+            cg.add(
+                numb.set_mirror_write(
+                    power_level_config[CONF_RAM_WRITE_LOCATION], ram_address
+                )
             )
-        )
-        cg.add(numb.set_power_level_offset(power_level_config[CONF_POWER_LEVEL_OFFSET]))
-        cg.add(numb.set_function(MicroNovaFunctions.STOVE_FUNCTION_POWER_LEVEL))

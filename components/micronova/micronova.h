@@ -1,45 +1,23 @@
 #pragma once
 
-#include "esphome/core/component.h"
 #include "esphome/components/uart/uart.h"
-#include "esphome/core/log.h"
+#include "esphome/core/component.h"
 #include "esphome/core/defines.h"
 #include "esphome/core/helpers.h"
+#include "esphome/core/log.h"
 
-#include <vector>
-#include <deque>
+namespace esphome::micronova {
 
-namespace esphome {
-namespace micronova {
+static constexpr uint8_t WRITE_QUEUE_SIZE = 10;
 
-static const char *const TAG = "micronova";
+/// Represents a command to be sent to the stove
+/// Write commands have the high bit (0x80) set in memory_location
+struct MicroNovaCommand {
+  uint8_t memory_location;
+  uint8_t memory_address;
+  uint8_t data;  ///< Only used for write commands
 
-static const std::string STOVE_STATES[11] = {"Off",
-                                             "Start",
-                                             "Pellets loading",
-                                             "Ignition",
-                                             "Working",
-                                             "Brazier cleaning",
-                                             "Final cleaning",
-                                             "Standby",
-                                             "No pellets alarm",
-                                             "No ignition alarm",
-                                             "Undefined alarm"};
-
-enum class MicroNovaFunctions {
-  STOVE_FUNCTION_VOID = 0,
-  STOVE_FUNCTION_SWITCH = 1,
-  STOVE_FUNCTION_ROOM_TEMPERATURE = 2,
-  STOVE_FUNCTION_THERMOSTAT_TEMPERATURE = 3,
-  STOVE_FUNCTION_FUMES_TEMPERATURE = 4,
-  STOVE_FUNCTION_STOVE_POWER = 5,
-  STOVE_FUNCTION_FAN_SPEED = 6,
-  STOVE_FUNCTION_STOVE_STATE = 7,
-  STOVE_FUNCTION_MEMORY_ADDRESS_SENSOR = 8,
-  STOVE_FUNCTION_WATER_TEMPERATURE = 9,
-  STOVE_FUNCTION_WATER_PRESSURE = 10,
-  STOVE_FUNCTION_POWER_LEVEL = 11,
-  STOVE_FUNCTION_CUSTOM = 12
+  bool is_write() const;
 };
 
 class MicroNova;
@@ -48,14 +26,7 @@ class MicroNova;
 // Interface classes.
 class MicroNovaBaseListener {
  public:
-  MicroNovaBaseListener() {}
   MicroNovaBaseListener(MicroNova *m) { this->micronova_ = m; }
-  virtual void dump_config();
-
-  void set_micronova_object(MicroNova *m) { this->micronova_ = m; }
-
-  void set_function(MicroNovaFunctions f) { this->function_ = f; }
-  MicroNovaFunctions get_function() { return this->function_; }
 
   void set_memory_location(uint8_t l) { this->memory_location_ = l; }
   uint8_t get_memory_location() { return this->memory_location_; }
@@ -63,114 +34,79 @@ class MicroNovaBaseListener {
   void set_memory_address(uint8_t a) { this->memory_address_ = a; }
   uint8_t get_memory_address() { return this->memory_address_; }
 
+  void dump_base_config();
+
  protected:
-  MicroNova *micronova_{nullptr};
-  MicroNovaFunctions function_ = MicroNovaFunctions::STOVE_FUNCTION_VOID;
+  MicroNova *micronova_;
   uint8_t memory_location_ = 0;
   uint8_t memory_address_ = 0;
 };
 
-class MicroNovaSensorListener : public MicroNovaBaseListener {
+class MicroNovaListener : public MicroNovaBaseListener, public PollingComponent {
  public:
-  MicroNovaSensorListener() {}
-  MicroNovaSensorListener(MicroNova *m) : MicroNovaBaseListener(m) {}
-  virtual void request_value_from_stove() = 0;
+  MicroNovaListener(MicroNova *m) : MicroNovaBaseListener(m) {}
+
+  void update() override { this->request_value_from_stove_(); }
+
   virtual void process_value_from_stove(int value_from_stove) = 0;
 
-  void set_needs_update(bool u) { this->needs_update_ = u; }
-  bool get_needs_update() { return this->needs_update_; }
+  void dump_base_config();
 
  protected:
-  bool needs_update_ = false;
-};
-
-class MicroNovaNumberListener : public MicroNovaBaseListener {
- public:
-  MicroNovaNumberListener(MicroNova *m) : MicroNovaBaseListener(m) {}
-  virtual void request_value_from_stove() = 0;
-  virtual void process_value_from_stove(int value_from_stove) = 0;
-
-  void set_needs_update(bool u) { this->needs_update_ = u; }
-  bool get_needs_update() { return this->needs_update_; }
-
- protected:
-  bool needs_update_ = false;
-};
-
-class MicroNovaSwitchListener : public MicroNovaBaseListener {
- public:
-  MicroNovaSwitchListener(MicroNova *m) : MicroNovaBaseListener(m) {}
-  virtual void set_stove_state(bool v) = 0;
-  virtual bool get_stove_state() = 0;
-
- protected:
-  uint8_t memory_data_on_ = 0;
-  uint8_t memory_data_off_ = 0;
-};
-
-class MicroNovaButtonListener : public MicroNovaBaseListener {
- public:
-  MicroNovaButtonListener(MicroNova *m) : MicroNovaBaseListener(m) {}
-
- protected:
-  uint8_t memory_data_ = 0;
+  void request_value_from_stove_();
 };
 
 /////////////////////////////////////////////////////////////////////
 // Main component class
-class MicroNova : public PollingComponent, public uart::UARTDevice {
+class MicroNova final : public Component, public uart::UARTDevice {
  public:
-  MicroNova() {}
-
-  struct MicroNovaSerialTransmission {
-    uint32_t request_transmission_time;
-    uint8_t memory_location;
-    uint8_t memory_address;
-    uint8_t data;
-    bool reply_pending;
-    MicroNovaSensorListener *initiating_listener;
-  };
+  MicroNova(GPIOPin *enable_rx_pin) : enable_rx_pin_(enable_rx_pin) {}
 
   void setup() override;
   void loop() override;
-  void update() override;
   void dump_config() override;
-  void register_micronova_listener(MicroNovaSensorListener *l) { this->micronova_listeners_.push_back(l); }
 
-  void request_address(uint8_t location, uint8_t address, MicroNovaSensorListener *listener);
-  void write_address(MicroNovaSerialTransmission write_request);
-  void read_address(MicroNovaSerialTransmission read_request);
-  int read_stove_reply();
+#ifdef MICRONOVA_LISTENER_COUNT
+  void register_micronova_listener(MicroNovaListener *listener);
 
-  void set_enable_rx_pin(GPIOPin *enable_rx_pin) { this->enable_rx_pin_ = enable_rx_pin; }
-
-  void set_current_stove_state(uint8_t s) { this->current_stove_state_ = s; }
-  uint8_t get_current_stove_state() { return this->current_stove_state_; }
-
-  void set_stove(MicroNovaSwitchListener *s) { this->stove_switch_ = s; }
-  MicroNovaSwitchListener *get_stove_switch() { return this->stove_switch_; }
-
-  void set_serial_reply_delay(uint16_t d) { this->serial_reply_delay_ = d; }
-  uint16_t get_serial_reply_delay() { return this->serial_reply_delay_; }
-
-  void queue_write_request(uint8_t location, uint8_t address, uint8_t data);
+  /// Queue a read request to the stove (low priority - added at back)
+  /// All listeners registered for this address will be notified with the result
+  /// @param location Memory location on the stove
+  /// @param address Memory address on the stove
   void queue_read_request(uint8_t location, uint8_t address);
+#endif
+
+#ifdef USE_MICRONOVA_WRITER
+  /// Queue a write command to the stove (processed before reads)
+  /// @param location Memory location on the stove
+  /// @param address Memory address on the stove
+  /// @param data Data to write
+  /// @return true if command was queued, false if queue was full
+  bool queue_write_command(uint8_t location, uint8_t address, uint8_t data);
+#endif
 
  protected:
+  void send_current_command_();
+  int read_stove_reply_();
+#ifdef MICRONOVA_LISTENER_COUNT
+  void request_update_listeners_();
+#endif
 
-  uint8_t current_stove_state_ = 0;
+  GPIOPin *enable_rx_pin_;
 
-  GPIOPin *enable_rx_pin_{nullptr};
+#ifdef USE_MICRONOVA_WRITER
+  StaticRingBuffer<MicroNovaCommand, WRITE_QUEUE_SIZE> write_queue_;
+#endif
+#ifdef MICRONOVA_LISTENER_COUNT
+  StaticRingBuffer<MicroNovaCommand, MICRONOVA_LISTENER_COUNT> read_queue_;
+#endif
+  MicroNovaCommand current_command_{};
+  uint32_t transmission_time_{0};  ///< Time when current command was sent
+  bool reply_pending_{false};      ///< True if we are waiting for a reply from the stove
 
-  uint16_t serial_reply_delay_=80;
-  Mutex reply_pending_mutex_;
-  MicroNovaSerialTransmission current_transmission_;
-  std::deque<MicroNovaSerialTransmission> write_request_queue_;
-  std::deque<MicroNovaSerialTransmission> read_request_queue_;
-
-  std::vector<MicroNovaSensorListener *> micronova_listeners_{};
-  MicroNovaSwitchListener *stove_switch_{nullptr};
+#ifdef MICRONOVA_LISTENER_COUNT
+  StaticVector<MicroNovaListener *, MICRONOVA_LISTENER_COUNT> listeners_;
+#endif
 };
 
-}  // namespace micronova
-}  // namespace esphome
+}  // namespace esphome::micronova

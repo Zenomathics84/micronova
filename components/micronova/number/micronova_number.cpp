@@ -1,46 +1,50 @@
 #include "micronova_number.h"
 
-namespace esphome {
-namespace micronova {
+namespace esphome::micronova {
+
+static const char *const TAG = "micronova.number";
+
+void MicroNovaNumber::dump_config() {
+  LOG_NUMBER("", "Micronova number", this);
+  this->dump_base_config();
+  if (this->value_offset_ != 0) {
+    ESP_LOGCONFIG(TAG, "  Value offset: %u", this->value_offset_);
+  }
+  if (this->has_mirror_write_) {
+    ESP_LOGCONFIG(TAG, "  Mirror write location: %02X, address: %02X", this->mirror_location_, this->mirror_address_);
+  }
+}
 
 void MicroNovaNumber::process_value_from_stove(int value_from_stove) {
-  float new_sensor_value = 0;
-
   if (value_from_stove == -1) {
+    this->publish_state(NAN);
     return;
   }
 
-  switch (this->get_function()) {
-    case MicroNovaFunctions::STOVE_FUNCTION_THERMOSTAT_TEMPERATURE:
-      new_sensor_value = ((float) value_from_stove) * this->traits.get_step();
-      break;
-    case MicroNovaFunctions::STOVE_FUNCTION_POWER_LEVEL:
-      new_sensor_value = (float) value_from_stove - this->power_level_offset_;
-      break;
-    default:
-      break;
+  if (value_from_stove < this->value_offset_) {
+    ESP_LOGW(TAG, "Raw value 0x%02X is below value offset %u, ignoring", value_from_stove, this->value_offset_);
+    return;
   }
-  this->publish_state(new_sensor_value);
+
+  float new_value = static_cast<float>(value_from_stove - this->value_offset_);
+  if (this->use_step_scaling_) {
+    new_value *= this->traits.get_step();
+  }
+  this->publish_state(new_value);
 }
 
 void MicroNovaNumber::control(float value) {
-  uint8_t new_number = 0;
-
-  switch (this->get_function()) {
-    case MicroNovaFunctions::STOVE_FUNCTION_THERMOSTAT_TEMPERATURE:
-      new_number = (uint8_t) (value / this->traits.get_step());
-      break;
-    case MicroNovaFunctions::STOVE_FUNCTION_POWER_LEVEL:
-      new_number = (uint8_t) value + this->power_level_offset_;
-      break;
-    default:
-      break;
+  uint8_t new_number;
+  if (this->use_step_scaling_) {
+    new_number = static_cast<uint8_t>(value / this->traits.get_step());
+  } else {
+    new_number = static_cast<uint8_t>(value);
   }
-  this->micronova_->queue_write_request(this->memory_write_location_, this->memory_address_, new_number);
-  this->micronova_->queue_write_request(0x80, 0x37, new_number);
-
-  this->micronova_->update();
+  new_number += this->value_offset_;
+  this->micronova_->queue_write_command(this->memory_location_, this->memory_address_, new_number);
+  if (this->has_mirror_write_) {
+    this->micronova_->queue_write_command(this->mirror_location_, this->mirror_address_, new_number);
+  }
 }
 
-}  // namespace micronova
-}  // namespace esphome
+}  // namespace esphome::micronova
